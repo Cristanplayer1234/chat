@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mini Discord Chat - Public Only</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <style>
+        .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+        .scrollbar-thin::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen flex">
+    <!-- Sidebar -->
+    <aside class="w-20 bg-gray-800 flex flex-col items-center py-4 space-y-4">
+        <div class="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-xl">D</div>
+        <div class="bg-gray-700 w-12 h-12 rounded-2xl flex items-center justify-center">#</div>
+        <div class="bg-gray-700 w-12 h-12 rounded-2xl flex items-center justify-center">#</div>
+        <div class="flex-1"></div>
+        <div class="bg-gray-700 w-12 h-12 rounded-2xl flex items-center justify-center">⚙️</div>
+    </aside>
+    <!-- Main Chat Area -->
+    <main class="flex-1 flex flex-col relative">
+        <!-- Channel Header -->
+        <header id="channel-header" class="bg-gray-800 px-6 py-4 flex items-center border-b border-gray-700 cursor-pointer select-none">
+            <span class="text-2xl mr-2 text-blue-400" id="channel-symbol">#</span>
+            <h1 class="font-bold text-lg" id="channel-title">general</h1>
+        </header>
+        <!-- Username Input -->
+        <section class="px-6 py-4 bg-gray-900 border-b border-gray-800 flex items-center space-x-3">
+            <input id="username-input" type="text" placeholder="Enter your username" maxlength="16"
+                class="bg-gray-700 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white w-48" />
+            <button id="set-username-btn" class="bg-blue-600 hover:bg-blue-700 rounded-full px-4 py-2 font-semibold">Set Username</button>
+            <span id="current-username" class="ml-4 text-gray-400"></span>
+        </section>
+        <!-- Messages -->
+        <section id="chat-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-4 scrollbar-thin">
+            <!-- Messages will appear here -->
+        </section>
+        <!-- Message Input -->
+        <footer class="bg-gray-800 px-6 py-4 border-t border-gray-700">
+            <form id="chat-form" class="flex space-x-3">
+                <input id="chat-input" type="text" placeholder="Message" autocomplete="off"
+                    class="flex-1 bg-gray-700 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white" />
+                <button type="submit" class="bg-blue-600 hover:bg-blue-700 rounded-full px-6 py-2 font-semibold">Send</button>
+            </form>
+        </footer>
+        <!-- User List Panel -->
+        <div class="fixed right-0 top-0 bg-gray-800 text-white w-56 h-full p-4 overflow-y-auto border-l border-gray-700 z-10">
+            <h2 class="font-bold mb-2 text-lg">Users</h2>
+            <div id="user-list"></div>
+        </div>
+    </main>
+    <script>
+    // Your Firebase config
+    const firebaseConfig = {
+        apiKey: "AIzaSyAx57udsLdWoEotuHnQy9rzE-B4xVEo_5k",
+        authDomain: "chat-7e231.firebaseapp.com",
+        databaseURL: "https://chat-7e231-default-rtdb.firebaseio.com",
+        projectId: "chat-7e231",
+        storageBucket: "chat-7e231.appspot.com",
+        messagingSenderId: "802140167551",
+        appId: "1:802140167551:web:f53a580cdb6fe3f392ce4a",
+        measurementId: "G-FXLY546J49"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-input');
+    const chatMessages = document.getElementById('chat-messages');
+    const usernameInput = document.getElementById('username-input');
+    const setUsernameBtn = document.getElementById('set-username-btn');
+    const currentUsername = document.getElementById('current-username');
+    const userList = document.getElementById('user-list');
+    const channelHeader = document.getElementById('channel-header');
+    const channelTitle = document.getElementById('channel-title');
+    const channelSymbol = document.getElementById('channel-symbol');
+
+    // Persistent username
+    let username = localStorage.getItem('chat_username') || "";
+    let chatRef = null;
+
+    function isValidUsername(name) {
+        return name && !name.toLowerCase().startsWith("guest") && name.trim().length > 0;
+    }
+
+    function updateUsernameDisplay() {
+        currentUsername.textContent = username ? "Current user: " + username : "Set your username!";
+    }
+
+    // Set username logic
+    setUsernameBtn.addEventListener('click', async () => {
+        const val = usernameInput.value.trim();
+        if (!isValidUsername(val)) {
+            alert("Please choose a valid username (not Guest)!");
+            return;
+        }
+        // Check if username is taken
+        const snap = await db.ref('users/' + val).once('value');
+        if (snap.exists() && val !== username) {
+            alert("That username is already taken!");
+            return;
+        }
+        // Remove old username from user list if changing
+        if (isValidUsername(username) && username !== val) db.ref('users/' + username).remove();
+        username = val;
+        localStorage.setItem('chat_username', username);
+        db.ref('users/' + username).set(true);
+        updateUsernameDisplay();
+        usernameInput.value = '';
+        updateUserList();
+        showResetButtonIfHost();
+        // Hide username input after setting
+        usernameInput.style.display = "none";
+        setUsernameBtn.style.display = "none";
+    });
+
+    usernameInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') setUsernameBtn.click();
+    });
+
+    // If username is already set, hide input and button
+    window.addEventListener('DOMContentLoaded', () => {
+        if (isValidUsername(username)) {
+            db.ref('users/' + username).set(true);
+            updateUsernameDisplay();
+            usernameInput.style.display = "none";
+            setUsernameBtn.style.display = "none";
+            showResetButtonIfHost();
+        }
+    });
+
+    // Add a message to the chat
+    function addMessage(user, text, time) {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = "flex items-start space-x-3";
+        msgDiv.innerHTML = `
+            <div class="w-10 h-10 rounded-full flex items-center justify-center bg-blue-500 text-white font-bold text-lg">
+                ${user[0].toUpperCase()}
+            </div>
+            <div>
+                <div class="font-semibold">${user} <span class="text-xs text-gray-400">${time || ""}</span></div>
+                <div class="bg-gray-700 rounded-lg px-4 py-2 mt-1">${text}</div>
+            </div>
+        `;
+        chatMessages.appendChild(msgDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Listen for new messages in public chat
+    function listenForMessages() {
+        chatMessages.innerHTML = "";
+        if (chatRef) chatRef.off();
+        chatRef = db.ref('messages').limitToLast(50);
+        chatRef.on('child_added', (snapshot) => {
+            const msg = snapshot.val();
+            if (isValidUsername(msg.user)) addMessage(msg.user, msg.text, msg.time);
+        });
+    }
+
+    // Handle sending a message
+    chatForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!isValidUsername(username)) {
+            alert("Set your username first!");
+            return;
+        }
+        const text = chatInput.value.trim();
+        if (!text) return;
+        const now = new Date();
+        const time = now.getHours().toString().padStart(2, '0') + ":" + now.getMinutes().toString().padStart(2, '0');
+        const msg = { user: username, text: text, time: time };
+        db.ref('messages').push(msg);
+        chatInput.value = '';
+    });
+
+    // --- User List Logic ---
+    function updateUserList() {
+        db.ref('users').once('value', (snapshot) => {
+            const users = snapshot.val() || {};
+            userList.innerHTML = "";
+            Object.keys(users).forEach(user => {
+                if (!isValidUsername(user)) return;
+                const userDiv = document.createElement('div');
+                userDiv.className = "block w-full text-left py-1 px-2 rounded bg-gray-700 mb-1";
+                userDiv.textContent = user;
+                userList.appendChild(userDiv);
+            });
+        });
+    }
+
+    // Update user list every 5 seconds
+    setInterval(updateUserList, 5000);
+    updateUserList();
+
+    // Always public chat
+    channelHeader.onclick = () => {
+        channelTitle.textContent = "general";
+        channelSymbol.textContent = "#";
+    };
+
+    // Listen for messages in public chat
+    listenForMessages();
+    updateUsernameDisplay();
+
+    // --- Reset Chat, Reset Usernames, and Invite Link Buttons for Host ---
+    function showResetButtonIfHost() {
+        let resetBtn = document.getElementById('reset-chat-btn');
+        let resetUsersBtn = document.getElementById('reset-users-btn');
+        let inviteBtn = document.getElementById('invite-link-btn');
+        if (username === "Pratij") {
+            // Reset Chat Button
+            if (!resetBtn) {
+                resetBtn = document.createElement('button');
+                resetBtn.id = 'reset-chat-btn';
+                resetBtn.textContent = 'Reset Chat';
+                resetBtn.className = 'fixed bottom-8 right-8 bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg z-50';
+                resetBtn.onclick = async () => {
+                    if (confirm("Are you sure you want to clear all messages for everyone?")) {
+                        await db.ref('messages').remove();
+                        chatMessages.innerHTML = "";
+                    }
+                };
+                document.body.appendChild(resetBtn);
+            }
+            // Reset Usernames Button
+            if (!resetUsersBtn) {
+                resetUsersBtn = document.createElement('button');
+                resetUsersBtn.id = 'reset-users-btn';
+                resetUsersBtn.textContent = 'Reset Usernames';
+                resetUsersBtn.className = 'fixed bottom-24 right-8 bg-yellow-600 hover:bg-yellow-700 text-white px-6 py-3 rounded-lg font-bold shadow-lg z-50';
+                resetUsersBtn.onclick = async () => {
+                    if (confirm("Are you sure you want to reset all usernames except yours?")) {
+                        await resetAllUsernamesExceptHost();
+                    }
+                };
+                document.body.appendChild(resetUsersBtn);
+            }
+            // Invite Link Button
+            if (!inviteBtn) {
+                inviteBtn = document.createElement('button');
+                inviteBtn.id = 'invite-link-btn';
+                inviteBtn.textContent = 'Copy Invite Link';
+                inviteBtn.className = 'fixed bottom-40 right-
